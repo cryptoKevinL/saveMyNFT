@@ -2,10 +2,14 @@ const ethers = require("ethers");
 const flashbot = require("@flashbots/ethers-provider-bundle");
 require("dotenv").config();
 
+// load required NFT ABI: https://api-goerli.etherscan.io/api?module=contract&action=getabi&address=0x6Dc77e11Ef57d9fBA318f3520d2BEA68A979313A
+const nftWorldsABI = require("../abi/nftWorlds.json");
 const nftEscrowABI = require("../abi/nftEscrow.json");
-const nftEscrowAddress = "0xeC20995CCd68d8524519bdB5068E140c35E1843D";
+// address of the deployed NFT smart-contract
+const nftWorldsAddress = "0x6Dc77e11Ef57d9fBA318f3520d2BEA68A979313A";
+const nftEscrowAddress = "0xAb046008551B2610c84DFd83292B20c9bA3f22B8";
 // unique ID of the NFT we are trying to rescue
-const nftID = 5;
+const nftID = 1;
 
 async function main() {
     // goerli network
@@ -24,15 +28,17 @@ async function main() {
         "goerli"
     );
     // define the NFT contract as an ethers object
-    const ERC721 = new ethers.Contract(nftEscrowAddress, nftEscrowABI, provider);
-    /* call the `unstake` function of the ERC721 contract
-    unstake  has the following parameters: 
-        - tokenId[] (uint256): the unique tokenId of the NFT we are trying to rescue (ie: 95744)
-        - to (address): address to unstake to
+    const ERC721 = new ethers.Contract(nftWorldsAddress, nftWorldsABI, provider);
+    /* call the `transferFrom` function of the ERC721 contract
+    Recall `transerFrom` has the following parameters: 
+        - from (address): the exploited address will be sending the NFT
+        - to (address): in this case the sponsor address paying for the NFT transfer gas fees will also receive the NFT
+        - tokenId (uint256): the unique tokenId of the NFT we are trying to rescue (ie: 95744)
     */
-    const nftUnstake = await ERC721.populateTransaction.unstake(
-        [5],
+    const nftTransfer = await ERC721.populateTransaction.transferFrom(
+        exploited.address,
         sponsor.address,
+        nftID
     );
     // the first transaction will pay for the gas fees of transferring the NFT from the exploited address to the sponsor address
     const tx1 = {
@@ -41,9 +47,9 @@ async function main() {
         // EIP-1559 style transaction
         type: 2, 
         // manually specify the amount of ETH to send to the exploited address to pay for gas fees
-        value: ethers.utils.parseUnits("0.005", "ether"),
+        value: ethers.utils.parseUnits("0.001", "ether"),
         // the max fee per unit of gas (arbitrarily set)
-        maxFeePerGas: ethers.utils.parseUnits("7", "gwei"),
+        maxFeePerGas: ethers.utils.parseUnits("5", "gwei"),
         // the max miner tip to pay (arbitrarily set)
         maxPriorityFeePerGas: ethers.utils.parseUnits("2", "gwei"),
         // the gas limit (arbitrarily set)
@@ -58,17 +64,17 @@ async function main() {
         // EIP-1559 style transaction
         type: 2, 
         // no ether is transferred when moving the NFT to the safe sponsor account
-        value: ethers.utils.parseUnits("0.004", "ether"),
-        // the necessary tx calldata required 
-        data: nftUnstake.data,
+        value: ethers.utils.parseUnits("0", "ether"),
+        // the necessary tx calldata required to transfer the NFT using `transferFrom`
+        data: nftTransfer.data,
         // the max fee per unit of gas (arbitrarily set)
-        maxFeePerGas: ethers.utils.parseUnits("7", "gwei"),
+        maxFeePerGas: ethers.utils.parseUnits("5", "gwei"),
         // the max miner tip to pay (arbitrarily set)
         maxPriorityFeePerGas: ethers.utils.parseUnits("2", "gwei"),
         // the gas limit (arbitrarily set)
         gasLimit: 100000,
         // the transaction must interact directly with the deployed NFT address on goerli network
-        to: nftEscrowAddress
+        to: nftWorldsAddress
     }
     // sign the transactions into a single flashbots bundle
     const signedTxBundle = await flashbotProvider.signBundle([
@@ -89,18 +95,11 @@ async function main() {
         // send the signed bundle transaction data to the flashbots relayers for the closest next future block (ie: t+1)
         const signedBundle = await flashbotProvider.sendRawBundle(signedTxBundle, blockNumber + 1);
         // wait until we receive a response and exit only once the transaction has been mined in the blockchain
-        const bundleResolution = await signedBundle.wait();        
-        if (bundleResolution === flashbot.BundleIncluded) {
-          console.log(`Congrats, NFT has been saved`)
-          process.exit(0)
-        } else if (bundleResolution === flashbot.BlockPassedWithoutInclusion) {
-          console.log(`Not included yet, still tring...`)
-        } else if (bundleResolution === flashbot.AccountNonceTooHigh) {
-          console.log("Nonce too high, bailing")
-          process.exit(1)
+        const waitResponse = await signedBundle.wait();        
+        if(waitResponse == 0) {
+            console.log("Successfully transferred the NFT to the sponsor address");
+            process.exit();
         }
-	else
-	  console.log(bundleResolution);
     });
 }
 
